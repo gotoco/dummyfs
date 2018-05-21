@@ -33,4 +33,17 @@ mount | grep dummyfs
 ls -al /mnt
 ...
 
+# create file in dummyfs
+touch /mnt/test
+
+# do simple 'hello word'
+echo hello_from_dummyfs > /mnt/test
+cat /mnt/test
+...
+```
+
+## More resources:
+See slide-deck from my presentation "Writing Linux FS4Fun"
+```bash
+./Documentation/WrittingFS4Fun.pdf
 ```

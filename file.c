@@ -4,7 +4,25 @@
 
 ssize_t dm_get_loffset(struct dm_inode *di, loff_t off)
 {
-	return DM_DEFAULT_BSIZE % off;
+	ssize_t ret = DM_EMPTY_ENTRY;
+	loff_t add = 0;
+	u32 i = 0;
+
+	if (off > DM_DEFAULT_BSIZE)
+		add += DM_DEFAULT_BSIZE % off;
+
+	for (i = 0; i < DM_INODE_TSIZE; ++i) {
+		if (di->i_addrb[i] + off > di->i_addre[i]) {
+			off -= (di->i_addre[i] - di->i_addrb[i]);
+		} else {
+			ret = di->i_addrb[i] + off;
+			break;
+		}
+	}
+
+	BUG_ON(ret == 0xdeadbeef);
+
+	return ret;
 }
 
 ssize_t dummy_read(struct kiocb *iocb, struct iov_iter *to)
@@ -18,17 +36,18 @@ ssize_t dummy_read(struct kiocb *iocb, struct iov_iter *to)
 	int nbytes;
 	size_t count = iov_iter_count(to);
 	loff_t off = iocb->ki_pos;
+	loff_t end = off + count;
 	size_t blk = 0;
 
 
 	inode = iocb->ki_filp->f_path.dentry->d_inode;
 	sb = inode->i_sb;
 	dinode = inode->i_private;
-
-	if (off >= dinode->i_size) {
+	if (off) {
 		return 0;
 	}
-	// calculate datablock number here::
+
+	/* calculate datablock number here */
 	blk = dm_get_loffset(dinode, off);
 	bh = sb_bread(sb, blk);
 	if (!bh) {
@@ -36,7 +55,7 @@ ssize_t dummy_read(struct kiocb *iocb, struct iov_iter *to)
 		return 0;
 	}
 
-	buffer = (char *)bh->b_data + off;
+	buffer = (char *)bh->b_data + (off % DM_DEFAULT_BSIZE);
 	nbytes = min((size_t)(dinode->i_size - off), count);
 
 	if (copy_to_user(buf, buffer, nbytes)) {
@@ -57,11 +76,6 @@ ssize_t dm_alloc_if_necessary(struct dm_superblock *sb, struct dm_inode *di,
 {
 	// Mock it until using bitmap
 	return 0;
-}
-
-
-void store_dmfs_inode (struct super_block *sb, struct dm_inode *inode_buf) { 
-
 }
 
 ssize_t dummy_write(struct kiocb *iocb, struct iov_iter *from)
@@ -90,17 +104,17 @@ ssize_t dummy_write(struct kiocb *iocb, struct iov_iter *from)
 	    return ret;
 	}
 	
-	// calculate datablock to write alloc if necessary
+	/* calculate datablock to write alloc if necessary */
 	blk = dm_alloc_if_necessary(dsb, dinode, off, count);
-	// dummy files are contigous so offset can be easly calculated
+	/* dummy files are contigous so offset can be easly calculated */
 	boff = dm_get_loffset(dinode, off);
-	bh = sb_bread(sb, blk);
+	bh = sb_bread(sb, boff);
 	if (!bh) {
 	    printk(KERN_ERR "Failed to read data block %lu\n", blk);
 	    return 0;
 	}
 	
-	buffer = (char *)bh->b_data + boff;
+	buffer = (char *)bh->b_data + (off % DM_DEFAULT_BSIZE);
 	if (copy_from_user(buffer, buf, count)) {
 	    brelse(bh);
 	    printk(KERN_ERR
@@ -117,7 +131,7 @@ ssize_t dummy_write(struct kiocb *iocb, struct iov_iter *from)
 	
 	dinode->i_size = max((size_t)(dinode->i_size), count);
 
-	store_dmfs_inode(sb, dinode);
+	dm_store_inode(sb, dinode);
 	
 	return count;
 }

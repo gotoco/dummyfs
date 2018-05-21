@@ -7,6 +7,9 @@
 #endif
 **/
 
+/* Layout version */
+#define DM_LAYOUT_VER		1
+
 
 /* FS SIZE/OFFSET CONST */
 #define DM_INODE_TSIZE		3
@@ -26,6 +29,7 @@
 #define DM_INODE_SIZE		512
 #define DM_INODE_NUMBER_TABLE	128
 #define DM_INODE_TABLE_SIZE	(DM_INODE_NUMBER_TABLE * DM_INODE_SIZE)/DM_DEFAULT_BSIZE
+#define DM_EMPTY_ENTRY		0xdeeddeed
 
 #define DM_NAME_LEN		255
 #define DM_DEF_ALLOC		4	/* By default alloc N blocks per extend */
@@ -78,8 +82,7 @@ struct dm_inode {
 
 struct dm_dir_entry {
 	uint32_t inode_nr;		/* inode number */
-	uint8_t name_len;		/* Name length */
-	uint16_t rec_len;		/* Record size */
+	uint32_t name_len;		/* Name length */
 	char name[256];			/* File name, up to DM_NAME_LEN */
 };
 

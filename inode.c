@@ -6,16 +6,69 @@
 
 #define FOREACH_BLK_IN_EXT(dmi, blk)					\
 u32 _ix = 0, b = 0, e = 0;						\
-for (_ix = 0; _ix < DM_INODE_TSIZE; ++_ix, 				\
-	b = dmi->i_addrb[_ix], e = dmi->i_addre[_ix], blk = b-1)	\
+for (_ix = 0, b = dmi->i_addrb[0], e = dmi->i_addre[0], blk = b-1;	\
+_ix < DM_INODE_TSIZE;							\
+++_ix, b = dmi->i_addrb[_ix], e = dmi->i_addre[_ix], blk = b-1)		\
 	while (++blk < e)
 
-void dm_destroy_inode(struct inode *inode) {
-	struct dm_inode *dinode = inode->i_private;
+void dump_dminode(struct dm_inode *dmi)
+{
+	printk(KERN_INFO "----------dump_dm_inode-------------");
+	printk(KERN_INFO "dm_inode addr: %p", dmi);
+	printk(KERN_INFO "dm_inode->i_version: %u", dmi->i_version);
+	printk(KERN_INFO "dm_inode->i_flags: %u", dmi->i_flags);
+	printk(KERN_INFO "dm_inode->i_mode: %u", dmi->i_mode);
+	printk(KERN_INFO "dm_inode->i_ino: %u", dmi->i_ino);
+	printk(KERN_INFO "dm_inode->i_hrd_lnk: %u", dmi->i_hrd_lnk);
+	printk(KERN_INFO "dm_inode->i_addrb[0]: %u", dmi->i_addrb[0]);
+	printk(KERN_INFO "dm_inode->i_addre[0]: %u", dmi->i_addre[0]);
+	printk(KERN_INFO "----------[end of dump]-------------");
+}
 
-	printk(KERN_INFO "Freeing private data of inode %p (%lu)\n",
-		dinode, inode->i_ino);
-	kmem_cache_free(dmy_inode_cache, dinode);
+struct dm_inode *cache_get_inode(void)
+{
+	struct dm_inode *di;
+
+	di = kmem_cache_alloc(dmy_inode_cache, GFP_KERNEL);
+	printk(KERN_INFO "#: dummyfs cache_get_inode : di=%p\n", di);
+
+	return di;
+}
+
+void cache_put_inode(struct dm_inode **di)
+{
+	printk(KERN_INFO "#: dummyfs cache_put_inode : di=%p\n", *di);
+	kmem_cache_free(dmy_inode_cache, *di);
+	*di = NULL;
+}
+
+void dm_destroy_inode(struct inode *inode) {
+	struct dm_inode *di = inode->i_private;
+
+	printk(KERN_INFO "#: dummyfs freeing private data of inode %p (%lu)\n",
+		di, inode->i_ino);
+	cache_put_inode(&di);
+}
+
+void dm_store_inode(struct super_block *sb, struct dm_inode *dmi)
+{
+	struct buffer_head *bh;
+	struct dm_inode *in_core;
+	uint32_t blk = dmi->i_addrb[0] - 1;
+
+	/* put in-core inode */
+	/* Change me: here we just use fact that current allocator is cont.
+	 * With smarter allocator the position should be found from itab
+	 */
+	bh = sb_bread(sb, blk);
+	BUG_ON(!bh);
+
+	in_core = (struct dm_inode *)(bh->b_data);
+	memcpy(in_core, dmi, sizeof(*in_core));
+
+	mark_buffer_dirty(bh);
+	sync_dirty_buffer(bh);
+	brelse(bh);
 }
 
 /* Here introduce allocation for directory... */
@@ -23,21 +76,24 @@ int dm_add_dir_record(struct super_block *sb, struct inode *dir,
 			struct dentry *dentry, struct inode *inode)
 {
 	struct buffer_head *bh;
-	struct dm_inode *parent;
+	struct dm_inode *parent, *dmi;
 	struct dm_dir_entry *dir_rec;
 	u32 blk, j;
 
 	parent = dir->i_private;
+	dmi = parent;
 
-	// Find offset, here just try
+	// Find offset, in dir in extends
 	FOREACH_BLK_IN_EXT(parent, blk) {
 		bh = sb_bread(sb, blk);
 		BUG_ON(!bh);
 		dir_rec = (struct dm_dir_entry *)(bh->b_data);
 		for (j = 0; j < sb->s_blocksize; ++j) {
-			/* We gound free space */
-			if (dir_rec->inode_nr == 0xdeeddeed) {
+			/* We found free space */
+			if (dir_rec->inode_nr == DM_EMPTY_ENTRY) {
 				dir_rec->inode_nr = inode->i_ino;
+				dir_rec->name_len = strlen(dentry->d_name.name);
+				memset(dir_rec->name, 0, 256);
 				strcpy(dir_rec->name, dentry->d_name.name);
 				mark_buffer_dirty(bh);
 				sync_dirty_buffer(bh);
@@ -55,22 +111,35 @@ int dm_add_dir_record(struct super_block *sb, struct inode *dir,
 	return -ENOSPC;
 }
 
-/* this is ialloc.c */
 int alloc_inode(struct super_block *sb, struct dm_inode *dmi)
 {
 	struct dm_superblock *dsb;
+	u32 i;
 
 	dsb = sb->s_fs_info;
-	dmi->i_ino = dsb->s_inode_cnt =+ 1;
+	dsb->s_inode_cnt += 1;
+	dmi->i_ino = dsb->s_inode_cnt;
+	dmi->i_version = DM_LAYOUT_VER;
+	dmi->i_flags = 0;
+	dmi->i_mode = 0;
+	dmi->i_size = 0;
 
 	/* TODO: check if there is any space left on the device */
-	dmi->i_addrb[0] = dsb->s_last_blk;
+	/* First block is allocated for in-core inode struct */
+	/* Then 4 block for extends: that mean dmi struct is in i_addrb[0]-1 */
+	dmi->i_addrb[0] = dsb->s_last_blk + 1;
 	dmi->i_addre[0] = dsb->s_last_blk += 4;
+	for (i = 1; i < DM_INODE_TSIZE; ++i) {
+		dmi->i_addre[i] = 0;
+		dmi->i_addrb[i] = 0;
+	} 
+
+	dm_store_inode(sb, dmi);
+	/* TODO: update inode table, block bitmap */
 
 	return 0;
 }
 
-/* this is ialloc.c */
 struct inode *dm_new_inode(struct inode *dir, struct dentry *dentry,
 				umode_t mode)
 {
@@ -83,20 +152,21 @@ struct inode *dm_new_inode(struct inode *dir, struct dentry *dentry,
 	sb = dir->i_sb;
 	dsb = sb->s_fs_info;
 
-	di = kmem_cache_alloc(dmy_inode_cache, GFP_KERNEL);
-	di->i_mode = mode;
+	di = cache_get_inode();
 
-	//allocate space dmy way:
-	//sb has last block on it just use it
+	/* allocate space dmy way:
+ 	 * sb has last block on it just use it
+ 	 */
 	ret = alloc_inode(sb, di);
 
-	if (!ret) {
-		kmem_cache_free(dmy_inode_cache, di); 
+	if (ret) {
+		cache_put_inode(&di);
 		printk(KERN_ERR "Unable to allocate disk space for inode");
 		return NULL;
 	}
+	di->i_mode = mode;
 
-	BUG_ON(!S_ISREG(mode) || !S_ISDIR(mode));
+	BUG_ON(!S_ISREG(mode) && !S_ISDIR(mode));
 
 	/* Create VFS inode */
 	inode = new_inode(sb);
@@ -109,7 +179,6 @@ struct inode *dm_new_inode(struct inode *dir, struct dentry *dentry,
 	return inode;
 }
 
-/* this goes to namei.c */
 int dm_add_ondir(struct inode *inode, struct inode *dir, struct dentry *dentry,
 			umode_t mode)
 {
@@ -124,22 +193,23 @@ int dm_create(struct inode *dir, struct dentry *dentry, umode_t mode, bool excl)
 	return dm_create_inode(dir, dentry, mode);
 }
 
-/* this goes to namei.c */
 int dm_create_inode(struct inode *dir, struct dentry *dentry, umode_t mode)
 {
 	struct inode *inode;
 
-	// allocate space
-	// create incore inode
-	// create VFS inode
-	// finally ad inode to parent dir
+	/* allocate space
+	 * create incore inode
+	 * create VFS inode
+	 * finally ad inode to parent dir
+	 */
 	inode = dm_new_inode(dir, dentry, mode);
 
-	// add new inode to parent dir
-	// dm_add_ondir
+	if (!inode)
+		return -ENOSPC;
+
+	/* add new inode to parent dir */
 	return dm_add_ondir(inode, dir, dentry, mode);
 }
-
 
 int dm_mkdir(struct inode *dir, struct dentry *dentry,
 			umode_t mode)
@@ -163,8 +233,9 @@ void dm_put_inode(struct inode *inode)
 {
 	struct dm_inode *ip = inode->i_private;
 
-	kmem_cache_free(dmy_inode_cache, ip);
+	cache_put_inode(&ip);
 }
+
 
 struct dm_inode *dm_iget(struct super_block *sb, ino_t ino)
 {
@@ -174,8 +245,6 @@ struct dm_inode *dm_iget(struct super_block *sb, ino_t ino)
 	struct dm_inode *itab;
 	u32 blk = 0;
 	u32 *ptr;
-
-	printk(KERN_INFO "#:dm_iget : ino=%lu\n", ino);
 
 	/* get inode table 'file' */
 	bh = sb_bread(sb, DM_INODE_TABLE_OFFSET);
@@ -193,9 +262,9 @@ struct dm_inode *dm_iget(struct super_block *sb, ino_t ino)
 
 	bh = sb_bread(sb, blk);
 	ip = (struct dm_inode*)bh->b_data;
-	if (ip->i_ino == 0xdeeddeed)
+	if (ip->i_ino == DM_EMPTY_ENTRY)
 		return NULL;
-	dinode = kmem_cache_alloc(dmy_inode_cache, GFP_KERNEL);
+	dinode = cache_get_inode();
 	memcpy(dinode, ip, sizeof(*ip));
 	bforget(bh);
 
@@ -218,8 +287,9 @@ void dm_fill_inode(struct super_block *sb, struct inode *des, struct dm_inode *s
 		des->i_fop = &dummy_file_ops;
 	else {
 		des->i_fop = NULL;
-		WARN_ON(!des->i_fop);
 	}
+
+	WARN_ON(!des->i_fop);
 }
 
 struct dentry *dm_lookup(struct inode *dir,
@@ -245,7 +315,7 @@ struct dentry *dm_lookup(struct inode *dir,
 			dir_rec = (struct dm_dir_entry *)(bh->b_data);
 
 			for (j = 0; j < sb->s_blocksize; ++j) {
-				if (dir_rec->inode_nr == 0xdeeddeed) {
+				if (dir_rec->inode_nr == DM_EMPTY_ENTRY) {
 					break;
 				}
 

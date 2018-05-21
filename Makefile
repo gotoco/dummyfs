@@ -4,6 +4,7 @@ TARGET = dmyfs
 KDIR := /root/kernel/linux-4.15.13
 PWD := $(shell pwd)
 
+# To implement some macros declaration after satement is required
 ccflags-y := -std=gnu99 -Wno-declaration-after-statement
 
 obj-m += $(TARGET).o

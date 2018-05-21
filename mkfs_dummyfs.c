@@ -16,7 +16,7 @@
 /* Global variables */
 char wipe_g[] = {0xcb, 0xcb, 0xcb, 0xcb, 0xcb, 0xcb, 0xcb, 0xcb};
 char zero_g[] = {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0};
-char laf[] = {'l', 'o', 's', 't', '+', 'f', 'o', 'u', 'n', 'd', '\0'};
+char laf[] = {'.', 'l', 'o', 's', 't', '+', 'f', 'o', 'u', 'n', 'd', '\0'};
 char dotdot[] = {'.', '.', '\0'};
 char dot[] = {'.', '\0'};
 
@@ -112,7 +112,7 @@ int write_inode_table(int fd)
 	}
 
 	lseek(fd, (DM_INODE_TABLE_OFFSET + 1) * DM_DEFAULT_BSIZE, SEEK_SET);
-	// Zero Extension first
+	// clear Extension first
 	for (int i = 0; i < (it_s)/sizeof(zero_g); ++i)
 		if (sizeof(zero_g) != write(fd, &zero_g, sizeof(zero_g))) {
 			ret = -1;
@@ -160,7 +160,6 @@ int write_root_inode(int fd)
 		.inode_nr = DM_ROOT_INO,
 		.name_len = sizeof(dotdot)/sizeof(char),
 		.name = {0},
-		.rec_len = sizeof(dot_dentry),
 	};
 
 	memcpy(dot_dentry.name, dotdot, sizeof(dotdot) / sizeof(char));
@@ -176,7 +175,6 @@ int write_root_inode(int fd)
 		.inode_nr = DM_ROOT_INO,
 		.name_len = sizeof(dot)/sizeof(char),
 		.name = {0},
-		.rec_len = sizeof(sdot_dentry),
 	};
 
 	memcpy(sdot_dentry.name, dot, sizeof(dot) / sizeof(char));
@@ -199,12 +197,12 @@ int write_lostfound_inode(int fd)
 		.i_version = 1,
 		.i_flags = 0,
 		.i_mode = S_IFDIR | S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH,
+		.i_ino = DM_LAF_INO,
 		.i_uid = 0,
+		.i_hrd_lnk = 1,
 		.i_ctime = dm_ctime,
 		.i_mtime = dm_ctime,
 		.i_size = 0,
-		.i_hrd_lnk = 1,
-		.i_ino = DM_LAF_INO,
 		.i_addrb = {DM_LF_INODE_OFFSET+1, 0, 0},
 		.i_addre = {DM_LF_INODE_OFFSET+DM_DEF_ALLOC+1, 0, 0},
 	};
@@ -226,7 +224,6 @@ int write_lostfound_inode(int fd)
 		.inode_nr = DM_ROOT_INO,
 		.name_len = sizeof(dotdot)/sizeof(char),
 		.name = {0},
-		.rec_len = sizeof(dot_dentry),
 	};
 
 	memcpy(dot_dentry.name, dotdot, sizeof(dotdot) / sizeof(char));
@@ -237,18 +234,32 @@ int write_lostfound_inode(int fd)
 		ret = -1;
 	}
 
+	// Write '.' reference to the root folder
+	struct dm_dir_entry sdot_dentry = {
+		.inode_nr = DM_ROOT_INO,
+		.name_len = sizeof(dot)/sizeof(char),
+		.name = {0},
+	};
+
+	memcpy(sdot_dentry.name, dot, sizeof(dot) / sizeof(char));
+	lseek(fd, (DM_LF_INODE_OFFSET + 1) * DM_DEFAULT_BSIZE + sizeof(sdot_dentry), SEEK_SET);
+
+	if (sizeof(sdot_dentry) != write(fd, &sdot_dentry, sizeof(sdot_dentry))) {
+		perror("Error: root dot FAILURE!\n");
+		ret = -1;
+	}
+
 	// Write lost and found folder name to root node
 	struct dm_dir_entry laf_dentry = {
 		.inode_nr = DM_LAF_INO,
 		.name_len = sizeof(laf)/sizeof(char),
 		.name = {0},
-		.rec_len = sizeof(laf_dentry),
 	};
+	syncfs(fd);
 
-	uint32_t off = (DM_ROOT_INODE_OFFSET + 1) * DM_DEFAULT_BSIZE + 2*sizeof(struct dm_dir_entry);
+	uint32_t off = (DM_ROOT_INODE_OFFSET + 1) * DM_DEFAULT_BSIZE + 2 * sizeof(laf_dentry);
 	memcpy(laf_dentry.name, laf, sizeof(laf) / sizeof(char));
 	lseek(fd, off, SEEK_SET);
-
 	if (sizeof(laf_dentry) != write(fd, &laf_dentry, sizeof(laf_dentry))) {
 		perror("Error: write_lostfound_inode FAILURE!\n");
 		ret = -1;
