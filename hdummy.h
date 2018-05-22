@@ -33,6 +33,7 @@ ssize_t dummy_write(struct kiocb *iocb, struct iov_iter *from);
 int dummy_readdir(struct file *filp, struct dir_context *ctx);
 
 /* inode.c */
+int isave_intable(struct super_block *sb, struct dm_inode *dmi, u32 i_block);
 void dm_destroy_inode(struct inode *inode);
 void dm_fill_inode(struct super_block *sb, struct inode *des, struct dm_inode *src);
 int dm_create_inode(struct inode *dir, struct dentry *dentry, umode_t mode);

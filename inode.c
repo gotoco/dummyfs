@@ -132,10 +132,11 @@ int alloc_inode(struct super_block *sb, struct dm_inode *dmi)
 	for (i = 1; i < DM_INODE_TSIZE; ++i) {
 		dmi->i_addre[i] = 0;
 		dmi->i_addrb[i] = 0;
-	} 
+	}
 
 	dm_store_inode(sb, dmi);
-	/* TODO: update inode table, block bitmap */
+	isave_intable(sb, dmi, (dmi->i_addrb[0] - 1));
+	/* TODO: update inode block bitmap */
 
 	return 0;
 }
@@ -236,6 +237,32 @@ void dm_put_inode(struct inode *inode)
 	cache_put_inode(&ip);
 }
 
+int isave_intable(struct super_block *sb, struct dm_inode *dmi, u32 i_block)
+{
+	struct buffer_head *bh;
+	struct dm_inode *itab;
+	u32 blk = 0;
+	u32 *ptr;
+
+	/* get inode table 'file' */
+	bh = sb_bread(sb, DM_INODE_TABLE_OFFSET);
+	itab = (struct dm_inode*)(bh->b_data);
+	/* right now we just allocated one itable extend for files */
+	blk = itab->i_addrb[0];
+	bforget(bh);
+
+	bh = sb_bread(sb, blk);
+	/* Get block of ino inode*/
+	ptr = (u32 *)(bh->b_data);
+	/* inodes starts from index 1: -2 offset */
+	*(ptr + dmi->i_ino - 2) = i_block;
+
+	mark_buffer_dirty(bh);
+	sync_dirty_buffer(bh);
+	brelse(bh);
+
+	return 0;
+}
 
 struct dm_inode *dm_iget(struct super_block *sb, ino_t ino)
 {
@@ -255,7 +282,7 @@ struct dm_inode *dm_iget(struct super_block *sb, ino_t ino)
 
 	bh = sb_bread(sb, blk);
 	/* Get block of ino inode*/
-	ptr = (u32 *)(bh->b_data);	
+	ptr = (u32 *)(bh->b_data);
 	/* inodes starts from index 1: -2 offset */
 	blk = *(ptr + ino - 2);
 	bforget(bh);
@@ -268,7 +295,7 @@ struct dm_inode *dm_iget(struct super_block *sb, ino_t ino)
 	memcpy(dinode, ip, sizeof(*ip));
 	bforget(bh);
 
-	return dinode;	
+	return dinode;
 }
 
 void dm_fill_inode(struct super_block *sb, struct inode *des, struct dm_inode *src)
